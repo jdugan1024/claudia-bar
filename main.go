@@ -1,4 +1,4 @@
-// ABOUTME: Claude Code status line — displays model, directory, git branch, token usage, and cost.
+// ABOUTME: claudia-status — displays model, directory, git branch, token usage, cost, and rate limits.
 // ABOUTME: Reads JSON from stdin (Claude Code status hook format) and writes a formatted line to stdout.
 
 package main
@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type Model struct {
@@ -25,11 +26,21 @@ type Cost struct {
 	TotalCostUSD float64 `json:"total_cost_usd"`
 }
 
+type FiveHourLimit struct {
+	UsedPercentage float64 `json:"used_percentage"`
+	ResetsAt       int64   `json:"resets_at"`
+}
+
+type RateLimits struct {
+	FiveHour FiveHourLimit `json:"five_hour"`
+}
+
 type Input struct {
 	CWD           string        `json:"cwd"`
 	Model         Model         `json:"model"`
 	ContextWindow ContextWindow `json:"context_window"`
 	Cost          Cost          `json:"cost"`
+	RateLimits    RateLimits    `json:"rate_limits"`
 }
 
 func shortenPath(path, home string) string {
@@ -57,6 +68,37 @@ func gitBranch(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func progressBar(pct float64, width int) string {
+	filled := int(pct / 100 * float64(width))
+	if filled > width {
+		filled = width
+	}
+	bar := []rune(strings.Repeat("█", filled) + strings.Repeat("░", width-filled))
+	label := []rune(fmt.Sprintf("%d%%", int(pct)))
+	start := (width - len(label)) / 2
+	if start < 0 {
+		start = 0
+	}
+	for i, r := range label {
+		if start+i < width {
+			bar[start+i] = r
+		}
+	}
+	return string(bar)
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0m"
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh%02dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
 func format(input Input, branch, home string) string {
 	path := shortenPath(input.CWD, home)
 
@@ -65,16 +107,22 @@ func format(input Input, branch, home string) string {
 		loc = fmt.Sprintf("%s [%s]", path, branch)
 	}
 
-	tokens := fmt.Sprintf("in:%s out:%s (%d%%)",
+	tokens := fmt.Sprintf("in:%s out:%s [%s]",
 		formatTokens(input.ContextWindow.TotalInputTokens),
 		formatTokens(input.ContextWindow.TotalOutputTokens),
-		int(input.ContextWindow.UsedPercentage),
+		progressBar(input.ContextWindow.UsedPercentage, 10),
 	)
 
 	cost := fmt.Sprintf("$%.4f", input.Cost.TotalCostUSD)
 
-	return fmt.Sprintf("%s | %s | %s | %s",
-		input.Model.DisplayName, loc, tokens, cost)
+	parts := []string{input.Model.DisplayName, loc, tokens, cost}
+
+	if rl := input.RateLimits.FiveHour; rl.ResetsAt > 0 {
+		until := formatDuration(time.Until(time.Unix(rl.ResetsAt, 0)))
+		parts = append(parts, fmt.Sprintf("5h [%s] %s", progressBar(rl.UsedPercentage, 10), until))
+	}
+
+	return strings.Join(parts, " | ")
 }
 
 func main() {
