@@ -73,18 +73,7 @@ func progressBar(pct float64, width int) string {
 	if filled > width {
 		filled = width
 	}
-	bar := []rune(strings.Repeat("█", filled) + strings.Repeat("░", width-filled))
-	label := []rune(fmt.Sprintf("%d%%", int(pct)))
-	start := (width - len(label)) / 2
-	if start < 0 {
-		start = 0
-	}
-	for i, r := range label {
-		if start+i < width {
-			bar[start+i] = r
-		}
-	}
-	return string(bar)
+	return fmt.Sprintf("%d%% %s", int(pct), strings.Repeat("█", filled)+strings.Repeat("░", width-filled))
 }
 
 func formatDuration(d time.Duration) string {
